@@ -54,7 +54,7 @@ class CloudService
         );
 
         if (!$response || ($response['code'] ?? 0) == 0) {
-            exception($response['msg'] ?? '云端服务异常');
+            throw new \Exception($response['msg'] ?? '云端服务异常');
         }
 
         $data = is_array($response['data'] ?? null) ? $response['data'] : [];
@@ -63,20 +63,20 @@ class CloudService
         $licenseDir = dirname(self::$authpath);
 
         if ($secretKey === '') {
-            exception('云端返回的授权信息不完整');
+            throw new \Exception('云端返回的授权信息不完整');
         }
 
         if (!is_dir($licenseDir) && !@mkdir($licenseDir, 0755, true)) {
-            exception('创建授权目录失败，请检查目录权限');
+            throw new \Exception('创建授权目录失败，请检查目录权限');
         }
 
         if (file_put_contents(self::$authpath, $secretKey, LOCK_EX) === false) {
-            exception('保存授权锁文件失败');
+            throw new \Exception('保存授权锁文件失败');
         }
 
         // license 文件不是必需项，只有云端返回内容时才落盘
         if ($license !== '' && file_put_contents(self::$licensepath, $license, LOCK_EX) === false) {
-            exception('保存授权文件失败');
+            throw new \Exception('保存授权文件失败');
         }
     }
 
@@ -145,195 +145,12 @@ class CloudService
     /**
      * 获取服务器唯一编码
      *
-     * Windows 下不执行 wmic、ipconfig、powershell 等系统命令，避免被杀毒软件拦截。
-     *
      * @param boolean $isforce
      * @return string
      */
     public function getcode($isforce = false)
     {
-        $os = PHP_OS_FAMILY;
-
-        $enkey = hash('sha256', 'hello world');
-        $iv    = substr($enkey, 0, 16);
-
-        $filename  = md5("{$os}_machine_code") . ".dat";
-        $cachePath = RUNTIME_PATH . $filename;
-        $licenseDir = APP_PATH . 'common' . DS . 'license' . DS;
-        $codeFile   = $licenseDir . 'machine.id';
-        $fingerprint = $this->getMachineFingerprint($os);
-
-        if (!$isforce && is_file($cachePath)) {
-            $cachedata = file_get_contents($cachePath);
-            $encryData = openssl_decrypt($cachedata, 'AES-256-CBC', $enkey, 0, $iv);
-            $cache     = json_decode($encryData, true);
-
-            if (is_array($cache) && !empty($cache['exp']) && $cache['exp'] > time()) {
-                $cacheCode = $cache['hash'] ?? ($cache['code'] ?? '');
-
-                if ($cacheCode !== '') {
-                    $cacheFingerprint = $cache['fingerprint'] ?? '';
-                    $cacheMachineId   = $cache['machine_id'] ?? '';
-                    if (
-                        $cacheFingerprint === ''
-                        || !hash_equals($cacheFingerprint, $fingerprint)
-                        || strpos($cacheMachineId, 'mid-') !== 0
-                    ) {
-                        $cacheCode = '';
-                    }
-                }
-
-                if ($cacheCode !== '') {
-                    // machine.id 被误删时，从有效缓存恢复，避免缓存过期后授权码突变
-                    if (!is_file($codeFile)) {
-                        if (!is_dir($licenseDir)) {
-                            @mkdir($licenseDir, 0755, true);
-                        }
-                        @file_put_contents($codeFile, $cacheMachineId, LOCK_EX);
-                    }
-                    return $cacheCode;
-                }
-            }
-        }
-
-        if (!is_dir($licenseDir) && !@mkdir($licenseDir, 0755, true)) {
-            exception('创建授权目录失败，请检查目录权限');
-        }
-
-        $raw = '';
-        if (!$isforce && is_file($codeFile)) {
-            $raw = trim((string) file_get_contents($codeFile));
-        }
-
-        if ($raw === '' || strpos($raw, 'mid-') !== 0) {
-            $raw = $this->createMachineId();
-
-            if (file_put_contents($codeFile, $raw, LOCK_EX) === false) {
-                exception('写入机器码文件失败，请检查授权目录权限');
-            }
-        }
-
-        $code = strtolower($os) . '-' . hash('sha256', $raw . '|' . $fingerprint);
-
-        if (!is_dir(RUNTIME_PATH)) {
-            @mkdir(RUNTIME_PATH, 0755, true);
-        }
-
-        $encryData = openssl_encrypt(json_encode([
-            'exp'         => time() + 86400 * 7,
-            'hash'        => $code,
-            'machine_id'  => $raw,
-            'fingerprint' => $fingerprint,
-        ]), 'AES-256-CBC', $enkey, 0, $iv);
-
-        if ($encryData !== false) {
-            @file_put_contents($cachePath, $encryData, LOCK_EX);
-        }
-
-        return $code;
-    }
-
-    /**
-     * 生成本地持久化机器 ID
-     * @return string
-     */
-    protected function createMachineId()
-    {
-        try {
-            $random = bin2hex(random_bytes(16));
-        } catch (\Throwable $th) {
-            $random = md5(uniqid('', true) . mt_rand());
-        }
-
-        return 'mid-' . $random;
-    }
-
-    /**
-     * 获取服务器环境指纹
-     *
-     * @param string $os
-     * @return string
-     */
-    protected function getMachineFingerprint($os)
-    {
-        $items = [];
-
-        if ($os === 'Windows') {
-            // Windows 下不执行 wmic、powershell 等系统命令，避免被杀毒软件拦截。
-            $items[] = (string) gethostname();
-            $items[] = (string) getenv('COMPUTERNAME');
-            $items[] = (string) getenv('USERDOMAIN');
-            $items[] = (string) getenv('PROCESSOR_IDENTIFIER');
-
-            // 如果希望换目录也失效，保留 ROOT_PATH；如果希望同机迁移目录不变码，可以删除这一行。
-            $items[] = realpath(ROOT_PATH) ?: ROOT_PATH;
-        } else {
-            // Linux 优先读取系统 machine-id，正常独立服务器该值稳定且区分度高。
-            foreach (['/etc/machine-id', '/var/lib/dbus/machine-id'] as $file) {
-                if (is_file($file) && is_readable($file)) {
-                    $value = trim((string) file_get_contents($file));
-                    if ($value !== '') {
-                        $items[] = $value;
-                        break;
-                    }
-                }
-            }
-
-            // 再读取 DMI 硬件/虚拟机标识，增强普通复制和模板复制场景下的区分度。
-            foreach (
-                [
-                    '/sys/class/dmi/id/product_uuid',
-                    '/sys/class/dmi/id/board_serial',
-                    '/sys/class/dmi/id/product_serial',
-                    '/sys/class/dmi/id/chassis_serial',
-                ] as $file
-            ) {
-                if (is_file($file) && is_readable($file)) {
-                    $value = trim((string) file_get_contents($file));
-                    if ($value !== '') {
-                        $items[] = $value;
-                    }
-                }
-            }
-
-            // 极简环境下的兜底项，只有前面的系统标识都取不到时才使用。
-            if (empty($items)) {
-                $items[] = (string) gethostname();
-                $items[] = realpath(ROOT_PATH) ?: ROOT_PATH;
-            }
-        }
-
-        $items = array_filter(array_map(function ($value) {
-            $value = strtolower(trim((string) $value));
-            return preg_replace('/\s+/', ' ', $value);
-        }, $items), function ($value) {
-            return !in_array($value, [
-                '',
-                'none',
-                'null',
-                'nil',
-                'n/a',
-                'na',
-                'unknown',
-                'undefined',
-                'default',
-                'default string',
-                'system serial number',
-                'to be filled by o.e.m.',
-                'to be filled by oem',
-                '00000000-0000-0000-0000-000000000000',
-                'ffffffff-ffff-ffff-ffff-ffffffffffff',
-            ], true);
-        });
-
-        $items = array_values(array_unique($items));
-        sort($items);
-
-        if (empty($items)) {
-            exception('获取服务器指纹失败，请确认服务器环境信息可读');
-        }
-
-        return hash('sha256', implode('|', $items));
+        return MachineCodeService::getcode($isforce);
     }
 
     /**
@@ -446,7 +263,7 @@ class CloudService
         if ($path == 'product/device/add/source/sub' || stripos($path, 'device/add/source/sub') !== false) {
             $totalNum = Db::name('device')->where('node_type', '<>', 1)->count();
             if ($allownum >= 0 && $totalNum >= $allownum) {
-                exception("当前设备数量已达到授权上限[{$allownum}],无法继续添加");
+                throw new \Exception("当前设备数量已达到授权上限[{$allownum}],无法继续添加");
             }
         }
     }
@@ -458,7 +275,7 @@ class CloudService
     {
         $baseurl = trim($this->cloudconfig['url'] ?? '');
         if (empty($baseurl)) {
-            exception('请先配置云端地址');
+            throw new \Exception('请先配置云端地址');
         }
 
         if (!preg_match('/^https?:\/\//i', $baseurl)) {
@@ -468,7 +285,7 @@ class CloudService
         $token = '';
         if ($auth) {
             if (!is_file(self::$authpath) || !$token = file_get_contents(self::$authpath)) {
-                exception('接口token异常，请重新获取');
+                throw new \Exception('接口token异常，请重新获取');
             }
         }
 
@@ -501,9 +318,9 @@ class CloudService
                 $json = (array) json_decode($content, true);
             }
         } catch (TransferException $e) {
-            exception('网络异常~');
+            throw new \Exception('网络异常~');
         } catch (\Exception $e) {
-            exception('请求异常' . $e->getMessage());
+            throw new \Exception('请求异常' . $e->getMessage());
         }
 
         return $json;

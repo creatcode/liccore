@@ -1,6 +1,14 @@
 <?php
+defined('DS') or define('DS', DIRECTORY_SEPARATOR);
+
+$publicPath = dirname($_SERVER['SCRIPT_FILENAME']) . DS;
+
+defined('ROOT_PATH') or define('ROOT_PATH', dirname($publicPath) . DS);
+defined('APP_PATH') or define('APP_PATH', ROOT_PATH . 'application' . DS);
+defined('RUNTIME_PATH') or define('RUNTIME_PATH', ROOT_PATH . 'runtime' . DS);
+
+require_once "../vendor/creatcode/liccore/src/MachineCodeService.php";
 require_once "../vendor/creatcode/liccore/src/CloudService.php";
-// require_once "../vendor/autoload.php";
 require_once "../thinkphp/library/think/Config.php";
 
 /**
@@ -213,11 +221,6 @@ foreach ($requiredConfig as $key) {
 
 if ($method === 'POST') {
     try {
-        define('DS', DIRECTORY_SEPARATOR);
-        defined('APP_PATH') or define('APP_PATH', dirname($_SERVER['SCRIPT_FILENAME']) . DS);
-        defined('ROOT_PATH') or define('ROOT_PATH', dirname(realpath(APP_PATH)) . DS);
-        defined('RUNTIME_PATH') or define('RUNTIME_PATH', ROOT_PATH . 'runtime' . DS);
-
         // 清理机器码缓存，避免读取旧值
         $os = PHP_OS_FAMILY;
         $filename = md5("{$os}_machine_code") . ".dat";
