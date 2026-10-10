@@ -280,6 +280,8 @@ if ($method === 'POST') {
 
         $url = $cloudUrl . '/api/index/site_reg';
         $responseBody = curl_request($url, $params, 'POST');
+        // 兼容响应开头重复的 UTF-8 BOM 及混入的 JSON 空白字符
+        $responseBody = preg_replace('/\A(?:\xEF\xBB\xBF|[ \t\r\n])+/', '', $responseBody);
         $response = json_decode($responseBody, true);
 
         if (json_last_error() !== JSON_ERROR_NONE || !is_array($response)) {
